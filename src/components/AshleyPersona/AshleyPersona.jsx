@@ -1,36 +1,37 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useInView, useMotionValue, useReducedMotion } from 'motion/react'
 import { ashleyPersona } from './personaData'
-import { layouts } from './layouts'
+import { stage } from './layouts'
 import { PersonaStage } from './PersonaStage'
 import { PersonaMobile } from './PersonaMobile'
-import { breakpoints, colors, timing } from './tokens'
-
-const MAX_WIDTH = 1200
+import { useLiveFigure } from './useLiveFigure'
+import { mobileBreakpoint, timing } from './tokens'
 
 /**
- * Ashley Rodriguez — a living operational persona.
+ * Ashley Rodriguez — an animated, transparent persona graphic to drop into an
+ * existing section. No background, padding or surrounding copy: the host
+ * page supplies those.
  *
  * Props
  *   persona   – copy + image + anchors (defaults to personaData.js)
  *   imageSrc  – quick override for the character PNG
- *   style     – merged onto the outer <section>
+ *   style     – merged onto the root element
  *
- * Layout is chosen from the component's own width (not the viewport), so it
- * behaves the same inside a page column or a Framer frame.
+ * Fills its container's width. Up to `stage.W` (900px) wide it renders 1:1;
+ * narrower, the whole graphic scales down uniformly; below
+ * `mobileBreakpoint` it switches to a stacked layout.
  */
 export default function AshleyPersona({ persona = ashleyPersona, imageSrc, style, className }) {
   const data = imageSrc ? { ...persona, image: { ...persona.image, src: imageSrc } } : persona
 
   const ref = useRef(null)
   const width = useElementWidth(ref)
-  const mode = width < breakpoints.mobile ? 'mobile' : width < breakpoints.tablet ? 'tablet' : 'desktop'
-  const gutter = mode === 'mobile' ? 16 : 32
-  const stageWidth = Math.min(width - gutter * 2, MAX_WIDTH)
+  const mobile = width < mobileBreakpoint
+  const scale = Math.min(1, width / stage.W)
 
   const reduced = useReducedMotion() ?? false
-  // ~30% visible on wide layouts; the mobile column is long, so it triggers earlier.
-  const inView = useInView(ref, { once: true, amount: mode === 'mobile' ? 0.12 : 0.3 })
+  // ~30% visible; the stacked mobile layout is tall, so it triggers earlier.
+  const inView = useInView(ref, { once: true, amount: mobile ? 0.15 : 0.3 })
 
   const [settled, setSettled] = useState(false)
   useEffect(() => {
@@ -39,14 +40,16 @@ export default function AshleyPersona({ persona = ashleyPersona, imageSrc, style
     return () => clearTimeout(id)
   }, [inView, reduced])
 
-  // Cursor position across the section, −1…1 on each axis.
+  // Cursor position across the graphic, −1…1 on each axis.
   const pointerX = useMotionValue(0)
   const pointerY = useMotionValue(0)
+  const live = useLiveFigure({ settled, reduced, pointer: { x: pointerX, y: pointerY } })
+
   const onPointerMove = (e) => {
     if (reduced || e.pointerType !== 'mouse' || !ref.current) return
     const r = ref.current.getBoundingClientRect()
-    pointerX.set(((e.clientX - r.left) / r.width) * 2 - 1)
-    pointerY.set(((e.clientY - r.top) / r.height) * 2 - 1)
+    pointerX.set(Math.max(-1, Math.min(1, ((e.clientX - r.left) / r.width) * 2 - 1)))
+    pointerY.set(Math.max(-1, Math.min(1, ((e.clientY - r.top) / r.height) * 2 - 1)))
   }
   const onPointerLeave = () => {
     pointerX.set(0)
@@ -54,42 +57,42 @@ export default function AshleyPersona({ persona = ashleyPersona, imageSrc, style
   }
 
   return (
-    <section
+    <div
       ref={ref}
       className={className}
-      aria-label={`Persona: ${data.name}, ${data.role}`}
+      role="group"
+      aria-label={`${data.name}, ${data.role}`}
       onPointerMove={onPointerMove}
       onPointerLeave={onPointerLeave}
-      style={{
-        background: colors.paper,
-        padding: mode === 'mobile' ? `56px ${gutter}px 48px` : `72px ${gutter}px 64px`,
-        overflow: 'hidden',
-        ...style,
-      }}
+      style={{ position: 'relative', width: '100%', ...style }}
     >
-      <div style={{ maxWidth: MAX_WIDTH, margin: '0 auto' }}>
-        {mode === 'mobile' ? (
-          <PersonaMobile persona={data} show={inView} settled={settled} reduced={reduced} />
-        ) : (
-          <PersonaStage
-            persona={data}
-            layout={layouts[mode]}
-            stageWidth={stageWidth}
-            show={inView}
-            settled={settled}
-            reduced={reduced}
-            pointer={{ x: pointerX, y: pointerY }}
-          />
-        )}
-      </div>
-    </section>
+      {mobile ? (
+        <PersonaMobile persona={data} show={inView} settled={settled} reduced={reduced} live={live} />
+      ) : (
+        <div style={{ position: 'relative', width: '100%', height: stage.H * scale }}>
+          <div
+            style={{
+              position: 'absolute',
+              left: '50%',
+              top: 0,
+              width: stage.W,
+              height: stage.H,
+              transform: `translateX(-50%) scale(${scale})`,
+              transformOrigin: '50% 0',
+            }}
+          >
+            <PersonaStage persona={data} layout={stage} show={inView} settled={settled} reduced={reduced} live={live} />
+          </div>
+        </div>
+      )}
+    </div>
   )
 }
 
 const useIsoLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect
 
 function useElementWidth(ref) {
-  const [width, setWidth] = useState(() => (typeof window === 'undefined' ? MAX_WIDTH : window.innerWidth))
+  const [width, setWidth] = useState(stage.W)
   useIsoLayoutEffect(() => {
     const el = ref.current
     if (!el) return
@@ -101,4 +104,3 @@ function useElementWidth(ref) {
   }, [ref])
   return width
 }
-

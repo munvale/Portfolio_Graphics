@@ -63,21 +63,3 @@ export function scribbleLoop(cx, cy, rx, ry, seed, turns = 1.12) {
   }
   return d.trim()
 }
-
-/** A quick underline with a return flick, drawn in a `width × height` box. */
-export function scribbleUnderline(width, height, seed) {
-  const r = rng(seed)
-  const y = height * 0.45
-  return [
-    `M ${f(1 + jitter(r, 1))} ${f(y + jitter(r, 1))}`,
-    `Q ${f(width * 0.5)} ${f(y - 3 + jitter(r, 1.5))}, ${f(width - 1)} ${f(y + jitter(r, 1))}`,
-    `Q ${f(width * 0.55)} ${f(y + 2.5)}, ${f(width * 0.14)} ${f(height - 1.5)}`,
-  ].join(' ')
-}
-
-/** A slightly uneven horizontal rule. */
-export function scribbleRule(width, seed) {
-  const r = rng(seed)
-  const mid = 4
-  return `M 0 ${f(mid + jitter(r, 0.8))} C ${f(width * 0.3)} ${f(mid + jitter(r, 1.6))}, ${f(width * 0.7)} ${f(mid + jitter(r, 1.6))}, ${f(width)} ${f(mid + jitter(r, 0.8))}`
-}

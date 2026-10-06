@@ -1,225 +1,253 @@
 import { useEffect, useMemo, useState } from 'react'
 import { motion, useSpring, useTransform } from 'motion/react'
-import { Character } from './Character'
-import { HeroQuote, InsightCopy, NameBlock, StatusLine, fadeUp } from './Copy'
+import { Character, OVERLAY } from './Character'
+import { InsightCopy, NameBlock, fadeUp } from './Copy'
 import { drawOn } from './HandDrawn'
+import { FigureMark } from './Marks'
 import { scribbleLoop, seedFrom, wobblyLine } from './scribblePaths'
-import { anchorPoint, blockPoint, figureBox } from './layouts'
-import { colors, ease, motionScale, timing } from './tokens'
+import { blockPoint, figureBox } from './layouts'
+import { liveAnchor } from './useLiveFigure'
+import { colors, ease, motionScale as m, timing } from './tokens'
 
-const pct = (v, total) => `${(v / total) * 100}%`
-const spring = { stiffness: 120, damping: 20, mass: 0.6 }
-const LOOP_RADIUS = 10
+const TAU = Math.PI * 2
+const LOOP_PX = 10 // radius of the loop around each anchor
+const spring = { stiffness: 220, damping: 20 }
 
 /**
- * Desktop / tablet composition: Ashley centred on a fixed-aspect stage,
- * insights placed asymmetrically and tied to her with hand-drawn connectors.
+ * Wide composition: Ashley in the middle of a fixed W × H stage, five
+ * annotations around her. The parent scales the stage uniformly.
  */
-export function PersonaStage({ persona, layout, stageWidth, show, settled, reduced, pointer }) {
+export function PersonaStage({ persona, layout, show, settled, reduced, live }) {
   const { W, H } = layout
   const [activeId, setActiveId] = useState(null)
-  const box = figureBox(layout, persona.image)
-  const unitsPerPx = W / Math.max(stageWidth, 1)
+  const box = useMemo(() => figureBox(layout, persona.image), [layout, persona.image])
 
-  // Lean toward the active insight.
-  const lean = useMemo(() => {
+  // Lean toward the active annotation.
+  const { setLean } = live
+  useEffect(() => {
     const slot = activeId && layout.insights[activeId]
-    if (!slot || reduced) return { x: 0, y: 0, r: 0 }
+    if (!slot || reduced) return setLean({})
     const p = blockPoint(slot)
     const c = { x: box.left + box.width * persona.image.figureCenterX, y: box.top + box.height * 0.4 }
     const dx = p.x - c.x
     const dy = p.y - c.y
     const len = Math.hypot(dx, dy) || 1
-    return {
-      x: (dx / len) * motionScale.hoverShift,
-      y: (dy / len) * motionScale.hoverShift * 0.4,
-      r: Math.sign(dx) * motionScale.hoverTilt,
-    }
-  }, [activeId, layout, box.left, box.top, box.width, box.height, persona.image.figureCenterX, reduced])
+    setLean({ x: (dx / len) * m.lean, y: (dy / len) * m.lean * 0.4, r: Math.sign(dx) * m.leanTilt })
+  }, [activeId, layout, box, persona.image.figureCenterX, reduced, setLean])
 
-  const leanX = useSpring(0, spring)
-  const leanY = useSpring(0, spring)
-  const tilt = useSpring(0, spring)
-  useEffect(() => {
-    leanX.set(lean.x)
-    leanY.set(lean.y)
-    tilt.set(lean.r)
-  }, [lean, leanX, leanY, tilt])
-
-  const px = useSpring(pointer.x, spring)
-  const py = useSpring(pointer.y, spring)
-  const offsetX = useTransform(() => px.get() * motionScale.parallax.x + leanX.get())
-  const offsetY = useTransform(() => py.get() * motionScale.parallax.y + leanY.get())
-
-  const activate = (id) => setActiveId(id)
-  const clear = (id) => setActiveId((cur) => (cur === id ? null : cur))
+  const placed = persona.insights
+    .map((insight, index) => ({ insight, index, slot: layout.insights[insight.id] }))
+    .filter((p) => p.slot)
+  const unitsPerPx = OVERLAY.w / box.width
 
   return (
-    <div style={{ position: 'relative', width: '100%', aspectRatio: `${W} / ${H}` }}>
-      <HeroQuote
-        hero={persona.heroInsight}
-        show={show}
-        reduced={reduced}
-        style={{ position: 'absolute', left: pct(layout.quote.x, W), top: pct(layout.quote.y, H), width: pct(layout.quote.width, W) }}
-      />
-
+    <div style={{ position: 'relative', width: W, height: H }}>
       <Character
         image={persona.image}
         show={show}
-        settled={settled}
         reduced={reduced}
-        offsetX={offsetX}
-        offsetY={offsetY}
-        tilt={tilt}
-        style={{ left: pct(box.left, W), top: pct(box.top, H), width: pct(box.width, W), zIndex: 1 }}
-      />
-
-      <div
-        style={{ position: 'absolute', left: pct(layout.name.cx, W), top: pct(layout.name.y, H), transform: 'translateX(-50%)', width: 'max-content', zIndex: 2 }}
+        live={live}
+        style={{ left: box.left, top: box.top, width: box.width, zIndex: 1 }}
       >
+        {placed.map(({ insight, index, slot }) => {
+          const anchor = slot.anchor ?? insight.anchor
+          const active = activeId === insight.id
+          const dimmed = activeId !== null && !active
+          const start = timing.connectors.delay + index * timing.connectors.stagger
+          return (
+            <motion.g key={insight.id} animate={{ opacity: dimmed ? 0.2 : 1 }} transition={{ duration: 0.3 }}>
+              <AnchorLoop
+                id={insight.id}
+                cx={anchor.x * OVERLAY.w}
+                cy={anchor.y * OVERLAY.h}
+                r={LOOP_PX * unitsPerPx}
+                strokeWidth={(active ? 2 : 1.25) * unitsPerPx}
+                color={active ? colors.accent : colors.line}
+                index={index}
+                show={show}
+                settled={settled}
+                reduced={reduced}
+                delay={start + timing.connectors.duration * 0.85}
+              />
+              <FigureMark
+                type={insight.mark}
+                anchor={anchor}
+                show={show}
+                settled={settled}
+                reduced={reduced}
+                active={active}
+                delay={start + timing.connectors.duration}
+              />
+            </motion.g>
+          )
+        })}
+      </Character>
+
+      <div style={{ position: 'absolute', left: layout.name.cx, top: layout.name.y, transform: 'translateX(-50%)', width: 'max-content', zIndex: 2 }}>
         <NameBlock persona={persona} show={show} reduced={reduced} />
       </div>
 
-      <svg
-        aria-hidden
-        viewBox={`0 0 ${W} ${H}`}
-        style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', overflow: 'visible', pointerEvents: 'none', zIndex: 2 }}
-      >
-        {persona.insights.map((insight, i) => {
-          const slot = layout.insights[insight.id]
-          if (!slot) return null
-          return (
-            <Connector
-              key={insight.id}
-              id={insight.id}
-              from={blockPoint(slot)}
-              to={anchorPoint(box, slot.anchor ?? insight.anchor)}
-              bow={slot.bow}
-              index={i}
-              offsetX={offsetX}
-              offsetY={offsetY}
-              unitsPerPx={unitsPerPx}
-              show={show}
-              reduced={reduced}
-              active={activeId === insight.id}
-              dimmed={activeId !== null && activeId !== insight.id}
-            />
-          )
-        })}
-      </svg>
-
-      {persona.insights.map((insight, i) => {
-        const slot = layout.insights[insight.id]
-        if (!slot) return null
-        const onLeft = slot.side === 'left'
-        const active = activeId === insight.id
-        const dimmed = activeId !== null && !active
-        const delay = timing.facts.delay + i * timing.facts.stagger
-        return (
-          <motion.div
-            key={insight.id}
-            style={{
-              position: 'absolute',
-              top: pct(slot.y, H),
-              [onLeft ? 'right' : 'left']: onLeft ? pct(W - slot.x, W) : pct(slot.x, W),
-              width: pct(layout.blockWidth, W),
-              zIndex: 3,
-            }}
-            {...fadeUp(show, reduced, delay, timing.facts.duration, 10)}
-          >
-            <motion.button
-              type="button"
-              onPointerEnter={(e) => e.pointerType === 'mouse' && activate(insight.id)}
-              onPointerLeave={(e) => e.pointerType === 'mouse' && clear(insight.id)}
-              onClick={(e) => e.nativeEvent.pointerType !== 'mouse' && setActiveId(active ? null : insight.id)}
-              onFocus={() => activate(insight.id)}
-              onBlur={() => clear(insight.id)}
-              style={{ ...buttonReset, transformOrigin: onLeft ? '100% 0%' : '0% 0%' }}
-              animate={{
-                opacity: dimmed ? 0.3 : 1,
-                scale: active && !reduced ? 1.035 : 1,
-                x: active && !reduced ? (onLeft ? -4 : 4) : 0,
-              }}
-              transition={{ duration: 0.35, ease }}
-            >
-              <InsightCopy
-                insight={insight}
-                show={show}
-                reduced={reduced}
-                circleDelay={delay + timing.facts.duration}
-                align={onLeft ? 'right' : 'left'}
-              />
-            </motion.button>
-          </motion.div>
-        )
-      })}
-
-      <StatusLine
-        persona={persona}
-        show={show}
-        settled={settled}
-        reduced={reduced}
-        style={{ position: 'absolute', left: 0, right: 0, top: pct(layout.status.y, H) }}
-      />
+      {placed.map(({ insight, index, slot }) => (
+        <Annotation
+          key={insight.id}
+          insight={insight}
+          index={index}
+          slot={slot}
+          layout={layout}
+          box={box}
+          live={live}
+          show={show}
+          settled={settled}
+          reduced={reduced}
+          active={activeId === insight.id}
+          dimmed={activeId !== null && activeId !== insight.id}
+          onActivate={() => setActiveId(insight.id)}
+          onClear={() => setActiveId((cur) => (cur === insight.id ? null : cur))}
+          onToggle={() => setActiveId((cur) => (cur === insight.id ? null : insight.id))}
+        />
+      ))}
     </div>
   )
 }
 
-function Connector({ id, from, to, bow, index, offsetX, offsetY, unitsPerPx, show, reduced, active, dimmed }) {
-  const seed = seedFrom(id)
-  const { delay, stagger, duration } = timing.connectors
-  const start = delay + index * stagger
+/** One annotation: its text block plus the connector that ties it to Ashley. */
+function Annotation({ insight, index, slot, layout, box, live, show, settled, reduced, active, dimmed, onActivate, onClear, onToggle }) {
+  const seed = seedFrom(insight.id)
+  const onLeft = slot.side === 'left'
+  const anchor = slot.anchor ?? insight.anchor
+  const from = blockPoint(slot)
 
-  // The line follows Ashley as she moves, so it always meets the loop's edge.
-  const d = useTransform(() => {
-    const tx = to.x + offsetX.get() * unitsPerPx
-    const ty = to.y + offsetY.get() * unitsPerPx
-    const dx = tx - from.x
-    const dy = ty - from.y
-    const len = Math.hypot(dx, dy) || 1
-    const end = { x: tx - (dx / len) * (LOOP_RADIUS + 3), y: ty - (dy / len) * (LOOP_RADIUS + 3) }
-    return wobblyLine(from, end, seed, bow)
+  const hover = useSpring(0, spring)
+  useEffect(() => {
+    hover.set(active && !reduced ? m.insightShift : 0)
+  }, [active, reduced, hover])
+
+  // Idle drift (each annotation on its own clock) + counter-parallax + hover push.
+  const px = { x: 4.3 + index * 0.6, y: 5.2 + index * 0.45 }
+  const bx = useTransform(() => {
+    const t = live.time.get() / 1000
+    return (
+      live.pointer.x.get() * m.annotationParallax.x +
+      Math.sin((TAU * t) / px.x + index * 1.7) * m.drift * live.alive.get() +
+      hover.get() * (onLeft ? -1 : 1)
+    )
   })
-  const loopX = useTransform(() => offsetX.get() * unitsPerPx)
-  const loopY = useTransform(() => offsetY.get() * unitsPerPx)
-  const loop = useMemo(() => scribbleLoop(to.x, to.y, LOOP_RADIUS, LOOP_RADIUS * 0.85, seed + 3), [to.x, to.y, seed])
+  const by = useTransform(() => {
+    const t = live.time.get() / 1000
+    return live.pointer.y.get() * m.annotationParallax.y + Math.cos((TAU * t) / px.y + index) * m.drift * 0.8 * live.alive.get()
+  })
 
+  // Connector re-computed every frame so it stays attached at both ends and
+  // breathes a little (its bend slowly oscillates).
+  const d = useTransform(() => {
+    const t = live.time.get() / 1000
+    const a = liveAnchor(box, anchor, live)
+    const f = { x: from.x + bx.get(), y: from.y + by.get() }
+    const dx = a.x - f.x
+    const dy = a.y - f.y
+    const len = Math.hypot(dx, dy) || 1
+    const end = { x: a.x - (dx / len) * (LOOP_PX + 3), y: a.y - (dy / len) * (LOOP_PX + 3) }
+    const bow = slot.bow + Math.sin((TAU * t) / (5.5 + index * 0.8)) * 0.04 * live.alive.get()
+    return wobblyLine(f, end, seed, bow)
+  })
+  const dotX = useTransform(() => from.x + bx.get())
+  const dotY = useTransform(() => from.y + by.get())
+
+  const start = timing.connectors.delay + index * timing.connectors.stagger
+  const factDelay = timing.facts.delay + index * timing.facts.stagger
   const stroke = active ? colors.accent : colors.line
-  const strokeStyle = { transition: 'stroke 0.3s, stroke-width 0.3s' }
 
   return (
-    <motion.g animate={{ opacity: dimmed ? 0.15 : 1 }} transition={{ duration: 0.3 }}>
-      <motion.circle
-        cx={from.x}
-        cy={from.y}
-        r={2.4}
-        fill={stroke}
-        style={strokeStyle}
-        initial={{ opacity: 0 }}
-        animate={{ opacity: show ? 1 : 0 }}
-        transition={{ delay: reduced ? 0 : start, duration: 0.2 }}
-      />
-      <motion.path
-        d={d}
-        fill="none"
-        stroke={stroke}
-        strokeWidth={active ? 1.8 : 1.1}
-        strokeLinecap="round"
-        style={strokeStyle}
-        {...drawOn(show, reduced, start, duration)}
-      />
-      <motion.g style={{ x: loopX, y: loopY }}>
-        <motion.path
-          d={loop}
-          fill="none"
-          stroke={stroke}
-          strokeWidth={active ? 1.8 : 1.1}
-          strokeLinecap="round"
-          style={strokeStyle}
-          {...drawOn(show, reduced, start + duration * 0.85, 0.35)}
-        />
-      </motion.g>
-    </motion.g>
+    <>
+      <svg
+        aria-hidden
+        width={layout.W}
+        height={layout.H}
+        style={{ position: 'absolute', inset: 0, overflow: 'visible', pointerEvents: 'none', zIndex: 2 }}
+      >
+        <motion.g animate={{ opacity: dimmed ? 0.2 : 1 }} transition={{ duration: 0.3 }}>
+          <motion.circle
+            cx={dotX}
+            cy={dotY}
+            r={2.6}
+            fill={stroke}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: show ? 1 : 0 }}
+            transition={{ delay: reduced ? 0 : start, duration: 0.2 }}
+          />
+          <motion.path
+            d={d}
+            fill="none"
+            stroke={stroke}
+            strokeWidth={active ? 2 : 1.25}
+            strokeLinecap="round"
+            style={{ transition: 'stroke 0.25s, stroke-width 0.25s' }}
+            {...drawOn(show, reduced, start, timing.connectors.duration)}
+          />
+        </motion.g>
+      </svg>
+
+      <motion.div
+        style={{
+          position: 'absolute',
+          top: slot.y,
+          [onLeft ? 'right' : 'left']: onLeft ? layout.W - slot.x : slot.x,
+          width: layout.blockWidth,
+          zIndex: 3,
+          x: bx,
+          y: by,
+          rotate: slot.tilt ?? 0,
+          transformOrigin: onLeft ? '100% 15px' : '0% 15px',
+        }}
+      >
+        <motion.div {...fadeUp(show, reduced, factDelay, timing.facts.duration, 10)}>
+          <motion.button
+            type="button"
+            onPointerEnter={(e) => e.pointerType === 'mouse' && onActivate()}
+            onPointerLeave={(e) => e.pointerType === 'mouse' && onClear()}
+            onClick={(e) => e.nativeEvent.pointerType !== 'mouse' && onToggle()}
+            onFocus={onActivate}
+            onBlur={onClear}
+            style={{ ...buttonReset, transformOrigin: onLeft ? '100% 0%' : '0% 0%' }}
+            animate={{ opacity: dimmed ? 0.35 : 1, scale: active && !reduced ? 1.04 : 1 }}
+            transition={{ duration: 0.3, ease }}
+          >
+            <InsightCopy
+              insight={insight}
+              show={show}
+              settled={settled}
+              reduced={reduced}
+              markDelay={factDelay + timing.facts.duration}
+              align={onLeft ? 'right' : 'left'}
+            />
+          </motion.button>
+        </motion.div>
+      </motion.div>
+    </>
+  )
+}
+
+/** Pen loop around an anchor. Draws on with the entrance, then now and then re-draws itself. */
+function AnchorLoop({ id, cx, cy, r, strokeWidth, color, index, show, settled, reduced, delay }) {
+  const d = useMemo(() => scribbleLoop(cx, cy, r, r * 0.85, seedFrom(id) + 3), [cx, cy, r, id])
+  const idle = settled && !reduced
+  const motionProps = idle
+    ? {
+        initial: false,
+        animate: { pathLength: [1, 1, 0, 1], opacity: 1 },
+        transition: { duration: 8 + index * 1.3, times: [0, 0.86, 0.9, 1], repeat: Infinity, delay: index * 0.9, ease: 'easeInOut' },
+      }
+    : drawOn(show, reduced, delay, 0.35)
+  return (
+    <motion.path
+      d={d}
+      fill="none"
+      stroke={color}
+      strokeWidth={strokeWidth}
+      strokeLinecap="round"
+      style={{ transition: 'stroke 0.25s, stroke-width 0.25s' }}
+      {...motionProps}
+    />
   )
 }
 
